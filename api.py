@@ -320,7 +320,7 @@ async def list_memories(
     """List memory keys with optional tag filter and pagination."""
     try:
         keys = manager.list_memories(tag=tag, limit=limit, offset=offset)
-        total = manager._storage.count(tag=tag)
+        total = manager.count_memories(tag=tag)
         return PaginatedKeysResponse(keys=keys, limit=limit, offset=offset, total=total)
     except MemoryManagerError as exc:
         raise _map_exception(exc)

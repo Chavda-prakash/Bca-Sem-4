@@ -621,6 +621,17 @@ class MemoryManager:
             raise MemoryValidationError("Offset must be non-negative")
         return self._storage.list_keys(tag=tag, limit=limit, offset=offset)
 
+    def count_memories(self, tag: Optional[str] = None) -> int:
+        """Return the total number of memories, optionally filtered by tag.
+
+        Args:
+            tag: If provided, count only memories with this tag.
+
+        Returns:
+            Integer count.
+        """
+        return self._storage.count(tag=tag)
+
     def get_statistics(self) -> Dict[str, Any]:
         """Get statistics about the memory store.
 
