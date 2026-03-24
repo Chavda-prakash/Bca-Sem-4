@@ -60,7 +60,12 @@ MAX_TAGS_PER_MEMORY = 50
 
 
 class MemoryEntry:
-    """Immutable representation of a stored memory."""
+    """Immutable representation of a stored memory.
+
+    Attributes are set once during ``__init__`` and should not be mutated
+    afterwards.  ``tags`` is stored as a *tuple* so that callers cannot
+    accidentally modify the collection in-place.
+    """
 
     __slots__ = ("key", "value", "timestamp", "tags", "hash", "updated_at")
 
@@ -76,7 +81,7 @@ class MemoryEntry:
         self.key = key
         self.value = value
         self.timestamp = timestamp
-        self.tags = list(tags)
+        self.tags: tuple = tuple(tags)
         self.hash = hash_value
         self.updated_at = updated_at or timestamp
 
@@ -85,7 +90,7 @@ class MemoryEntry:
             "key": self.key,
             "value": self.value,
             "timestamp": self.timestamp,
-            "tags": self.tags,
+            "tags": list(self.tags),
             "hash": self.hash,
             "updated_at": self.updated_at,
         }
@@ -151,12 +156,19 @@ INSERT OR IGNORE INTO schema_version(version) VALUES (1);
 
 
 class SQLiteStorage:
-    """Thread-safe SQLite storage backend with WAL mode and connection pooling."""
+    """Thread-safe SQLite storage backend with WAL mode and connection pooling.
+
+    Each thread receives its own ``sqlite3.Connection`` via
+    ``threading.local()``.  A registry of all open connections is
+    maintained so that ``close_all()`` can cleanly shut them down.
+    """
 
     def __init__(self, db_path: str = "memories.db"):
         self._db_path = db_path
         self._local = threading.local()
         self._lock = threading.Lock()
+        self._connections: list = []  # registry of (thread_id, conn)
+        self._conn_lock = threading.Lock()  # protects the registry
         self._init_db()
 
     # -- connection management ------------------------------------------------
@@ -171,6 +183,11 @@ class SQLiteStorage:
             conn.execute("PRAGMA busy_timeout=5000")
             conn.row_factory = sqlite3.Row
             self._local.connection = conn
+            # Register for cleanup
+            with self._conn_lock:
+                self._connections.append(
+                    (threading.current_thread().ident, conn)
+                )
         return conn
 
     @contextmanager
@@ -351,10 +368,23 @@ class SQLiteStorage:
         return [{"tag": r["tag"], "count": r["cnt"]} for r in rows]
 
     def close(self) -> None:
+        """Close the calling thread's connection."""
         conn = getattr(self._local, "connection", None)
         if conn is not None:
             conn.close()
             self._local.connection = None
+
+    def close_all(self) -> None:
+        """Close **all** registered connections across every thread."""
+        with self._conn_lock:
+            for _tid, conn in self._connections:
+                try:
+                    conn.close()
+                except Exception:  # noqa: BLE001
+                    pass
+            self._connections.clear()
+        self._local.connection = None
+        logger.debug("All storage connections closed")
 
 
 # ---------------------------------------------------------------------------
@@ -668,8 +698,8 @@ class MemoryManager:
         return ok
 
     def close(self) -> None:
-        """Close database connections."""
-        self._storage.close()
+        """Close all database connections (including other threads)."""
+        self._storage.close_all()
         logger.info("MemoryManager closed")
 
     # -- private helpers ------------------------------------------------------

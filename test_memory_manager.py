@@ -69,11 +69,11 @@ class TestStoreMemory(_TempDBMixin, unittest.TestCase):
         self.assertIsInstance(entry, MemoryEntry)
         self.assertEqual(entry.key, "k1")
         self.assertEqual(entry.value, "hello world")
-        self.assertEqual(entry.tags, ["tag1"])
+        self.assertEqual(entry.tags, ("tag1",))
 
     def test_store_without_tags(self):
         entry = self.manager.store_memory("k1", "value")
-        self.assertEqual(entry.tags, [])
+        self.assertEqual(entry.tags, ())
 
     def test_store_generates_hash(self):
         entry = self.manager.store_memory("k1", "test")
@@ -83,7 +83,7 @@ class TestStoreMemory(_TempDBMixin, unittest.TestCase):
         self.manager.store_memory("k1", "v1", ["a"])
         entry = self.manager.store_memory("k1", "v2", ["b"])
         self.assertEqual(entry.value, "v2")
-        self.assertEqual(entry.tags, ["b"])
+        self.assertEqual(entry.tags, ("b",))
 
     def test_store_preserves_original_timestamp_on_update(self):
         e1 = self.manager.store_memory("k1", "v1")
@@ -339,6 +339,35 @@ class TestAnalyzeAndIntegrity(_TempDBMixin, unittest.TestCase):
     def test_verify_integrity_nonexistent_raises(self):
         with self.assertRaises(MemoryNotFoundError):
             self.manager.verify_integrity("nope")
+
+    def test_verify_integrity_detects_corrupted_hash(self):
+        """Corrupting the stored hash in the DB should cause verify_integrity to fail."""
+        self.manager.store_memory("k1", "original value")
+        # Directly corrupt the hash in the database
+        conn = self.manager._storage._get_connection()
+        conn.execute(
+            "UPDATE memories SET hash = 'corrupted_hash' WHERE key = 'k1'"
+        )
+        conn.commit()
+        self.assertFalse(self.manager.verify_integrity("k1"))
+
+    def test_verify_integrity_detects_corrupted_value(self):
+        """Corrupting the stored value should cause verify_integrity to fail."""
+        self.manager.store_memory("k1", "original value")
+        # Directly corrupt the value in the database
+        conn = self.manager._storage._get_connection()
+        conn.execute(
+            "UPDATE memories SET value = 'tampered value' WHERE key = 'k1'"
+        )
+        conn.commit()
+        self.assertFalse(self.manager.verify_integrity("k1"))
+
+    def test_tags_are_immutable_tuple(self):
+        """MemoryEntry.tags should be a tuple (immutable)."""
+        entry = self.manager.store_memory("k1", "v", ["a", "b"])
+        self.assertIsInstance(entry.tags, tuple)
+        retrieved = self.manager.retrieve_memory("k1")
+        self.assertIsInstance(retrieved.tags, tuple)
 
 
 # =========================================================================

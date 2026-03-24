@@ -23,6 +23,7 @@ Endpoints:
 
 import logging
 import os
+import threading
 import time
 from typing import Any, Dict, List, Optional
 
@@ -56,7 +57,8 @@ logger = logging.getLogger("memory_api")
 # ---------------------------------------------------------------------------
 DB_PATH = os.environ.get("MEMORY_DB_PATH", "memories.db")
 API_KEY = os.environ.get("MEMORY_API_KEY", "")  # Empty = auth disabled
-RATE_LIMIT = os.environ.get("MEMORY_RATE_LIMIT", "60/minute")
+RATE_LIMIT = os.environ.get("MEMORY_RATE_LIMIT", "600/minute")
+CORS_ORIGINS = os.environ.get("MEMORY_CORS_ORIGINS", "*").split(",")
 
 # ---------------------------------------------------------------------------
 # Rate limiter
@@ -85,10 +87,10 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONRe
     )
 
 
-# CORS
+# CORS (configurable via MEMORY_CORS_ORIGINS env var, comma-separated)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -98,14 +100,17 @@ app.add_middleware(
 # Singleton MemoryManager
 # ---------------------------------------------------------------------------
 _manager: Optional[MemoryManager] = None
+_manager_lock = threading.Lock()
 
 
 def get_manager() -> MemoryManager:
-    """Lazy-init singleton MemoryManager."""
+    """Lazy-init singleton MemoryManager (double-checked locking)."""
     global _manager
     if _manager is None:
-        _manager = MemoryManager(db_path=DB_PATH)
-        logger.info("MemoryManager initialized (db=%s)", DB_PATH)
+        with _manager_lock:
+            if _manager is None:
+                _manager = MemoryManager(db_path=DB_PATH)
+                logger.info("MemoryManager initialized (db=%s)", DB_PATH)
     return _manager
 
 
